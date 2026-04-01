@@ -7,39 +7,49 @@ const char ssid[] = "Isaac";
 const char pass[] = "Vladisa182708";
 
 // Pines
-const int servoPins[8] = { 0, 2, 3, 4, 5, 6, 7, 8 };
-int currentPos[8] = { 90, 90, 90, 90, 90, 90, 90, 90 };
-int targetPos[8] = { 90, 90, 90, 90, 90, 90, 90, 90 };
-unsigned long lastMoveTime[8] = { 0 };
-
-// Objetos
-WiFiServer server(80);
-Servo servo[8];
+const int servoPins[9] = { 0, 2, 3, 4, 5, 6, 7, 8 }; 
+float currentPos[9] = { 90, 90, 90, 90, 90, 90, 90, 90, 90 };
+int targetPos[9] = { 90, 90, 90, 90, 90, 90, 90, 90, 90 };
+unsigned long lastUpdate = 0;
 
 // Parametros
-const int DEAD_ZONE = 0;
-const int SPEED_DELAY = 5;
+const float STEP_SIZE = 0.5;
+const int UPDATE_INTERVAL = 15;
 
-void setTarget(int i, int value) {
-    value = constrain(value, 0, 180);
-    if (abs(value - currentPos[i]) <= DEAD_ZONE) 
-        return;
-    
-    targetPos[i] = value;
-}
+WiFiServer server(80);
+WiFiClient wsClient;
+bool wsConnected = false;
+Servo servo[9];
+
 // Movimiento no bloqueante
 void updateServos() {
-    unsigned long now = millis();
+    if (millis() - lastUpdate < UPDATE_INTERVAL)
+        return;
     
-    for (int i = 1; i <= 7; i++) {
-        if (currentPos[i] == targetPos[i])
-            continue;
+    lastUpdate = millis();
+    
+    for (int i = 1; i <= 6; i++) {
+        float diff = targetPos[i] - currentPos[i];
         
-        if (now - lastMoveTime[i] >= (unsigned long)SPEED_DELAY) {
-            currentPos[i] += (currentPos[i] < targetPos[i]) ? 1 : -1;
+        if (abs(diff) > 0.1) {
+            // VELOCIDAD ADAPTATIVA: 
+            // Si está lejos, se mueve a paso normal. 
+            // Si está cerca (menos de 10 grados), reduce la velocidad para no vibrar.
+            float speedMult = (abs(diff) < 10) ? 0.3 : 1.0;
+            
+            if (diff > 0)
+                currentPos[i] += STEP_SIZE * speedMult;
+            else
+                currentPos[i] -= STEP_SIZE * speedMult;
+            
             servo[i].write(currentPos[i]);
-            lastMoveTime[i] = now;
-        }
+            
+            // Lógica Espejo para el Servo 7
+            if (i == 5) {
+                currentPos[7] = 180 - currentPos[5];
+                servo[7].write((int)currentPos[7]);
+            }
+        } 
     }
 }
 
@@ -47,27 +57,26 @@ void updateServos() {
 void processCommand(String cmd) {
     cmd.trim();
     int sep = cmd.indexOf(':');
-    if (sep == -1) return;
-    
-    int servoIndex = cmd.substring(0, sep).toInt();
-    int servoValue = cmd.substring(sep + 1).toInt();
-    
-    if (servoIndex < 1 || servoIndex > 6) 
+    if (sep == -1) 
         return;
     
-    Serial.print("Servo "); Serial.print(servoIndex); 
-    Serial.print(" -> "); Serial.println(servoValue);
+    int idx = cmd.substring(0, sep).toInt();
+    int val = cmd.substring(sep + 1).toInt();
     
-    setTarget(servoIndex, servoValue);
+    if (idx < 1 || idx > 6) 
+        return;
+
+    targetPos[idx] = constrain(val, 0, 180);
     
-    // Servo espejo del 5
-    if (servoIndex == 5) {
-        setTarget(7, 180 - servoValue);
+    if(idx == 5) {
+        targetPos[7] = 180 - targetPos[idx];
     }
+    
+    Serial.print("Servo "); Serial.print(idx); 
+    Serial.print(" moviendo a -> "); Serial.println(val);
 }
 
 // WebSocket setup
-
 String extractWSKey(String request) {
     int idx = request.indexOf("Sec-WebSocket-Key: ");
     if (idx == -1) return "";
@@ -151,29 +160,31 @@ void sha1(const uint8_t* data, size_t len, uint8_t* digest) {
 
 String computeAcceptKey(String key) {
     String magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    uint8_t sha1result[20];
-    sha1((const uint8_t*)magic.c_str(), magic.length(), sha1result);
+    uint8_t digest[20];
     
-    int encodedLen = Base64.encodedLength(20);
-    char encoded[encodedLen + 1];
-    Base64.encode(encoded, (char*)sha1result, 20);
-    encoded[encodedLen] = '\0';
+    sha1((const uint8_t*)magic.c_str(), magic.length(), digest);
+    int expectedLen = Base64.encodedLength(20);
+    char encoded[expectedLen + 1];
+    
+    Base64.encode(encoded, (char*)digest, 20);
+    encoded[expectedLen] = '\0';
+    
     return String(encoded);
 }
 
 // Setup
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
     Serial.print("Firmware WiFi: ");
     Serial.println(WiFi.firmwareVersion());
     
     // Posicion initial y soltar
-    for (int i = 1; i <= 7; i++) {
-        servo[i].attach(servoPins[i]);
-        servo[i].write(90);
-        currentPos[i] = 90;
-        targetPos[i] = 90;
-        delay(200);
+    for (int i = 1; i <= 8; i++) {
+        if (servoPins[i] != 0) {
+            servo[i].attach(servoPins[i]);
+            servo[i].write(90);
+            delay(200); 
+        }
     }
     
     WiFi.disconnect();
@@ -199,9 +210,6 @@ void setup() {
     Serial.println(WiFi.localIP());
     server.begin();
 }
-
-WiFiClient wsClient;
-bool wsConnected = false;
 
 // Leer frame WebSocket
 String readWSFrame(WiFiClient& client) {
@@ -251,43 +259,25 @@ void loop() {
         WiFiClient newClient = server.available();
         if (newClient) {
             String request = "";
-            unsigned long t = millis();
             
-            while (millis() - t < 2000) {
+            while (newClient.connected() && !request.endsWith("\r\n\r\n")) {
                 if (newClient.available()) {
-                    char c = newClient.read();
-                    request += c;
-                    if (request.endsWith("\r\n\r\n"))
-                        break;
+                    request += (char)newClient.read();
                 }
             }
             
             if (request.indexOf("Upgrade: websocket") != -1) {
-                String key = extractWSKey(request);
-                String accept = computeAcceptKey(key);
-        
-                newClient.println("HTTP/1.1 101 Switching Protocols");
-                newClient.println("Upgrade: websocket");
-                newClient.println("Connection: Upgrade");
-                newClient.println("Sec-WebSocket-Accept: " + accept);
-                newClient.println();
-        
+                int start = request.indexOf("Sec-WebSocket-Key: ") + 19;
+                String key = request.substring(start, request.indexOf("\r", start));
+                newClient.println("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + computeAcceptKey(key) + "\r\n");
                 wsClient = newClient;
                 wsConnected = true;
-                Serial.println("WebSocket conectado!");
+                Serial.println("WS Conectado");
             } else {
-                // HTTP normal (health check)
-                newClient.println("HTTP/1.1 200 OK");
-                newClient.println("Content-Type: text/plain");
-                newClient.println();
-                newClient.println("Arduino OK");
                 newClient.stop();
             }
         }
-    }
-            
-    // Leer comandos del cliente WebSocket activo
-    if (wsConnected) {
+    } else {
         if (!wsClient.connected()) {
             wsConnected = false;
             Serial.println("WebSocket desconectado.");
