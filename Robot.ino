@@ -60,6 +60,22 @@ void updateServos() {
 // Parsear comando "S:V"
 void processCommand(String cmd) {
     cmd.trim();
+    
+    if (cmd.indexOf(',') != -1) {
+        int start = 0;
+        while (start < cmd.length()) {
+            int comma = cmd.indexOf(',', start);
+            if (comma == -1) comma = cmd.length();
+            processSingle(cmd.substring(start, comma));
+            start = comma + 1;
+        }
+    } else {
+        processSingle(cmd);
+    }
+}
+
+void processSingle(String cmd) {
+    cmd.trim();
     int sep = cmd.indexOf(':');
     if (sep == -1) 
         return;
