@@ -13,8 +13,8 @@ int targetPos[9] = { 90, 90, 90, 90, 90, 90, 90, 90, 90 };
 unsigned long lastUpdate = 0;
 
 // Parametros
-const float STEP_SIZE = 0.5;
-const int UPDATE_INTERVAL = 15;
+const float STEP_SIZE = 2.0;
+const int UPDATE_INTERVAL = 10;
 
 WiFiServer server(80);
 WiFiClient wsClient;
@@ -28,14 +28,18 @@ void updateServos() {
     
     lastUpdate = millis();
     
-    for (int i = 1; i <= 6; i++) {
+    for (int i = 1; i <= 8; i++) {
+        
+        if (i == 7)
+            continue;
+        
         float diff = targetPos[i] - currentPos[i];
         
-        if (abs(diff) > 0.1) {
+        if (abs(diff) > 1.0) {
             // VELOCIDAD ADAPTATIVA: 
             // Si está lejos, se mueve a paso normal. 
             // Si está cerca (menos de 10 grados), reduce la velocidad para no vibrar.
-            float speedMult = (abs(diff) < 10) ? 0.3 : 1.0;
+            float speedMult = (abs(diff) < 5) ? 0.5 : 1.0;
             
             if (diff > 0)
                 currentPos[i] += STEP_SIZE * speedMult;
